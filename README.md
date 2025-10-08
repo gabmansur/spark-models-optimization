@@ -12,19 +12,24 @@ This portfolio project simulates a real-world Spark environment with skewed data
 - Reliability: documented runbook, basic SLOs, MTTR tracking stub
 
 
-**Table of Contents**
-1) Backstory & Context  
-2) Key Concepts  
-3) What’s in Here  
-4) How to Run  
-5) Diagnosis → Optimization  
-6) What Changes  
-7) Metrics & Reporting  
-8) Runbook (Example)  
-9) 6-Month Scale-Up  
-10) Next Steps  
-11) License & Credits  
-12) Why This Matters
+## 📖 Table of Contents
+1. [Backstory & Context](#1-backstory--context)  
+2. [Key Concepts (Plain Words)](#2-key-concepts-plain-words)  
+3. [What’s in Here](#3-whats-in-here)  
+4. [How to Run (Local, No Cluster Needed)](#4-how-to-run-local-no-cluster-needed)  
+5. [Diagnosis → Optimization: My Step-by-Step](#5-diagnosis--optimization-my-step-by-step)  
+   - [A. Inventory & Baseline](#a-inventory--baseline)  
+   - [B. Lineage (Mini)](#b-lineage-mini)  
+   - [C. Optimization & Refactoring](#c-optimization--refactoring)  
+   - [D. Validation & Results](#d-validation--results)  
+6. [What Changes Between Baseline and Optimized](#6-what-changes-between-baseline-and-optimized)  
+7. [Metrics & Reporting](#7-metrics--reporting)  
+8. [Runbook (Example)](#8-runbook-example)  
+9. [How This Scales to a 6-Month Engagement](#9-how-this-scales-to-a-6-month-engagement)  
+10. [Next Steps / Ideas to Extend](#10-next-steps--ideas-to-extend)  
+11. [License & Credits](#11-license--credits)  
+12. [Why This Matters](#why-this-matters)
+
 
 ## 1) Backstory & Context
 
