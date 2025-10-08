@@ -16,6 +16,8 @@ This portfolio project simulates a real-world Spark environment with skewed data
 1. [Backstory & Context](#1-backstory--context)  
 2. [Key Concepts (Plain Words)](#2-key-concepts-plain-words)  
 3. [What’s in Here](#3-whats-in-here)  
+    - [3.1 Baseline vs Optimized (At a Glance)](#31-baseline-vs-optimized-at-a-glance)
+    - [3.2 How to Compare (Quick Checklist)](#32-how-to-compare-quick-checklist)
 4. [How to Run (Local, No Cluster Needed)](#4-how-to-run-local-no-cluster-needed)  
 5. [Diagnosis → Optimization: My Step-by-Step](#5-diagnosis--optimization-my-step-by-step)  
    - [A. Inventory & Baseline](#a-inventory--baseline)  
@@ -31,7 +33,7 @@ This portfolio project simulates a real-world Spark environment with skewed data
 12. [Why This Matters](#why-this-matters)
 
 
-## 1) Backstory & Context
+## 1. Backstory & Context
 
 **The scenario:**
 A data platform grew over 7 years to ~60–70 PySpark models. Some of the most important jobs are slow, costly, and fragile. Adding new models takes too long. Leadership wants faster jobs, lower costs, and a safer way to build new ones.
@@ -63,9 +65,8 @@ I recreate a mini slice of that world, one representative pipeline (“daily_sal
 
 > 💡 I’m simulating a company’s data system that became bloated and slow. This project shows how I’d diagnose performance issues, fix them, and prove the difference, like tuning up an old machine until it runs smoothly again.
 
----
 
-## 2) Key Concepts (Plain Words)
+## 2. Key Concepts (Plain Words)
 
 * **p95 runtime:** the “slow-day line” 95% of runs are **faster** than this number. If p95 drops from 60m to 30m, your worst normal days got twice as fast
 * **SLO:** our goal for service (e.g., “freshness ≤ 60 min 99% of the time”).
@@ -78,32 +79,74 @@ I recreate a mini slice of that world, one representative pipeline (“daily_sal
 
 > 💡 These are the key ingredients of performance. p95 is your “slowest normal day,” MTTR measures how quickly things recover, and AQE is Spark’s auto-pilot mode for optimizing jobs mid-flight.
 
----
 
-## 3) What’s in Here
+## 3. What’s in Here
 
 ```
-spark-optimization-hands-on/
-  data/                 # generated dummy data (skew + many small files)
-  ops/                  # runtime logs, p50/p95 report, chart
+spark-models-optimization/
+  data/                 # generated dummy data (skew + many small files)  ❌ gitignored
+  ops/                  # run logs, p50/p95 report, chart                 ❌ gitignored
   src/
     jobs/
       generate_data.py  # builds customers + skewed transactions
       job_baseline.py   # naive/slow version to create a baseline
-      job_optimized.py  # optimized version (broadcast, salting, AQE, etc.)
+      job_optimized.py  # tuned version: AQE, broadcast, salting, partitioned writes
     utils/
-      common.py         # Spark session & path utilities
-      metrics.py        # run logger + p95 report builder
+      common.py         # SparkSession builder + path helpers
+      metrics.py        # run logger + p50/p95 report generator
   conf/
-    spark_local.conf    # sane defaults; AQE enabled; local[*] by default
+    spark_local.conf    # local defaults (AQE on, skewJoin on)
   README.md
   requirements.txt
   Makefile
 ```
 
-> 💡 The repo is structured like a small real-world data project; you can generate fake data, run two versions of a Spark job, measure their performance, and visualize improvements.
+note: /data and /ops are reproducible outputs and are excluded via .gitignore.
 
----
+### 3.1. Baseline vs Optimized (At a Glance)
+| **Aspect**                         | **Baseline (naïve)**                    | **Optimized (tuned)**                                       |
+| ---------------------------------- | --------------------------------------- | ----------------------------------------------------------- |
+| **File**                           | `src/jobs/job_baseline.py`              | `src/jobs/job_optimized.py`                                 |
+| **Join strategy**                  | Standard join (both sides shuffle)      | **Broadcast** small dimension → local joins                 |
+| **Data skew**                      | None handled → hot key stalls one task  | **Salting** + **AQE skew handling** redistributes load      |
+| **Adaptive Query Execution (AQE)** | Disabled / defaults only                | **Enabled** (`spark.sql.adaptive.enabled=true`)             |
+| **Transformations**                | May use Python UDFs (slow, unoptimized) | Uses **native Spark expressions** (`when`, `col`, `expr`)   |
+| **Output write**                   | Random partitions → many small files    | **Partitioned by `event_date`**, compacted into fewer files |
+| **Metrics & observability**        | Only total runtime logged               | **Runtime, cost/run, p50/p95**, and success status logged   |
+
+
+> 💡 Both jobs perform the same logic; one simulates legacy inefficiency, the other applies engineering best practices.
+
+### 3.2. How to Compare (Quick Checklist)
+
+1. Generate data
+```python
+python src/jobs/generate_data.py
+```
+
+2. Run the baseline job (2–3× for p95 accuracy)
+```python
+python src/jobs/job_baseline.py
+```
+
+3. Run the optimized job (2–3× again)
+```python
+python src/jobs/job_optimized.py
+```
+
+4. Build the report
+```python
+python src/utils/metrics.py report
+```
+
+5. Review the results
+
+- ops/report.md → p50/p95 runtime + before/after comparison
+- ops/p95_chart.png → visual runtime reduction
+- optional: open Spark UI at http://localhost:4040
+ during runs
+ 
+ > 💡 You’ll clearly see the difference: fewer shuffles, balanced tasks, faster writes, and measurable runtime/cost reduction.
 
 ## 4) How to Run (Local, No Cluster Needed)
 
@@ -142,9 +185,9 @@ Results:
 
 >💡 Just set up Python, generate the data, run both versions of the job, and produce a performance report, no cluster or special hardware needed.
 
----
 
-## 5) Diagnosis → Optimization: My Step-by-Step
+
+## 5. Diagnosis → Optimization: My Step-by-Step
 
 ### A. Inventory & Baseline
 
@@ -724,9 +767,8 @@ Quantify and communicate improvements clearly. After optimization, re-run both t
 4. Summarize findings in a short report (`ops/summary_report.md`).
 5. Confirm output parity: row counts, key uniqueness, and high-level aggregates match baseline vs optimized.
 
----
 
-## 6) What Changes Between Baseline and Optimized
+## 6. What Changes Between Baseline and Optimized
 
 | Area             | Baseline (slow)                  | Optimized (fast)                                 |
 | ---------------- | -------------------------------- | ------------------------------------------------ |
@@ -738,9 +780,9 @@ Quantify and communicate improvements clearly. After optimization, re-run both t
 
 > 💡 The optimized job redistributes the work fairly, uses Spark’s built-in optimizations, and stores data more efficiently, making it faster and cheaper.
 
----
 
-## 7) Metrics & Reporting
+
+## 7. Metrics & Reporting
 
 * **Runtime per run** → `ops/job_runs.csv`
 * **p50 / p95 runtime** → `ops/report.md`
@@ -764,9 +806,9 @@ Optional (extend later):
 
 > 💡 Each job records how long it takes and how much it costs. The system then summarizes that into a simple report you can show to any manager.
 
----
 
-## 8) Runbook (Example)
+
+## 8. Runbook (Example)
 
 ```
 RUNBOOK - daily_sales
@@ -801,9 +843,9 @@ Reprocess
 
 > 💡 This is your “how-to” for each job: what it does, how fast it should be, and what to do if it fails.
 
----
 
-## 9) How This Scales to a 6-Month Engagement
+
+## 9. How This Scales to a 6-Month Engagement
 
 This repo shows the **micro**. In a real project with 60–70 models, I:
 
@@ -815,9 +857,9 @@ This repo shows the **micro**. In a real project with 60–70 models, I:
 
 > 💡 The same principles can fix an entire data ecosystem: catalog everything, fix the worst performers, and create rules so future jobs are fast and stable by design.
 
----
 
-## 10) Next Steps / Ideas to Extend
+
+## 10. Next Steps / Ideas to Extend
 
 * Add **quality checks** (nulls, uniqueness) and log to `ops.quality_metrics`.
 * Record **lineage** (`ops.model_lineage`) by wrapping reads/writes.
@@ -827,18 +869,17 @@ This repo shows the **micro**. In a real project with 60–70 models, I:
 
 > 💡 Expand the project toward full data reliability and governance, like turning a prototype engine into a production-ready car.
 
----
 
-## 11) License & Credits
+## 11. License & Credits
 
 * Dummy data generated for demo purposes.
 * You’re free to fork/adapt with attribution.
 
 > 💡 It’s a learning sandbox; safe, open and built to showcase data engineering craftsmanship.
 
----
 
-### Why this matters
+
+### 12. Why this matters
 
 Anyone can say “we’ll optimize Spark.” This project shows **how**: a **diagnosis → intervention → measurement** loop, with **clear numbers** (p95, cost/run) and a **story** leadership understands.
 

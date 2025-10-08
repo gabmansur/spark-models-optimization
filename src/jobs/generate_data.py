@@ -20,7 +20,7 @@ from utils.common import get_spark, p
 
 # Tweak volumes if your laptop is slow
 N_CUSTOMERS = 10000
-N_TRANSACTIONS = 800_000   # increase to stress, decrease to run faster
+N_TRANSACTIONS = 120_000   # increase to stress, decrease to run faster
 SKEWED_CUSTOMER_SHARE = 0.20  # 20% of tx go to hot key: customer_id=0
 
 def main():
