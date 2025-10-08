@@ -129,6 +129,10 @@ spark-models-optimization/
 note: /data and /ops are reproducible outputs and are excluded via .gitignore.
 
 ### 3.1. Baseline vs Optimized (At a Glance)
+
+The baseline job intentionally contains common real-world anti-patterns: slow joins, uncontrolled skew, small-file explosions, Python UDFs, and no adaptive planning. 
+The optimized job replaces them with modern Spark engineering best practices, cutting runtime, improving reliability, and producing cleaner, more maintainable code, without adding a single extra core of compute.
+
 | **Aspect**                         | **Baseline (naïve)**                    | **Optimized (tuned)**                                       |
 | ---------------------------------- | --------------------------------------- | ----------------------------------------------------------- |
 | **File**                           | `src/jobs/job_baseline.py`              | `src/jobs/job_optimized.py`                                 |
@@ -140,7 +144,160 @@ note: /data and /ops are reproducible outputs and are excluded via .gitignore.
 | **Metrics & observability**        | Only total runtime logged               | **Runtime, cost/run, p50/p95**, and success status logged   |
 
 
-> 💡 Both jobs perform the same logic; one simulates legacy inefficiency, the other applies engineering best practices.
+<details> <summary>Detailed Explanation of Each Optimization</summary>
+
+#### 1. Join Strategy
+
+**Baseline:** performs a regular shuffle join, where both the transactions (large fact) and customers (small dimension) datasets are repartitioned and shuffled across the cluster by the join key. Even if one side is tiny, Spark will still move both datasets through a full network shuffle.
+This is one of the heaviest operations Spark can perform, involving disk I/O, network I/O, and serialization.
+
+- Problems
+    - Large network traffic between executors.
+     - Disk spill from shuffling huge partitions.
+     - Long “Exchange” stages in the Spark UI.
+
+**Optimized:** uses a broadcast join, pushing the small dimension table to every executor node’s memory. Now each partition of transactions can join locally without moving the big data.
+Spark automatically chooses this if:
+
+```python
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", "10MB")
+```
+
+but here we force it manually to demonstrate the concept.
+
+- Impact
+    - Drastically reduced shuffle volume (network cost).
+    - No “Exchange” step for the small dataset.
+    - Near-linear speed-up when the dimension is <200 MB.
+
+#### 2. Data Skew Handling
+
+**Baseline:** All transactions with the same customer_id end up in the same partition.
+Because ~20 % of all rows share customer_id = 0, that single partition gets 20 % of the work while the rest of the cluster sits idle.The final stage can’t finish until that last heavy task completes; this inflates the p95 runtime (the “slowest normal day”).
+
+- Symptoms in Spark UI
+    - One task far longer than the others in the same stage.
+    - Uneven “Task Duration” histogram.
+    - “Task Time Distribution” skewed to the right.
+
+**Optimized:** We apply key salting, splitting the hot key (customer_id=0) into several virtual keys: 0_0, 0_1, … 0_15. The corresponding dimension entries are replicated to match those salts.
+This redistributes work evenly across executors. Together with AQE skew join handling, Spark can even detect and rebalance moderately skewed partitions at runtime.
+
+- Impact
+    - Tasks finish in roughly the same time → shorter stage completion.
+    - CPU utilization rises (no idle executors).
+    - p95 latency drops by up to 70–80 %.
+
+#### 3. Adaptive Query Execution (AQE)
+
+**Baseline:** Without AQE, Spark's execution plan is decided before it starts running. It assumes partition sizes based on old statistics or heuristics. If partitions end up smaller or larger than expected, Spark can't adapt, causing under-utilized or overloaded tasks.
+
+**Optimized:**
+With `spark.sql.adaptive.enabled=true`, Spark adjusts the plan mid-flight using actual runtime statistics.
+
+It can:
+- Merge small shuffle partitions.
+- Split large (skewed) partitions.
+- Switch join strategies (e.g., shuffle-hash → broadcast-hash) dynamically.
+- Impact:
+    - Reduced shuffle I/O (fewer partitions).
+    - Shorter tail latency due to auto-rebalancing.
+    - Spark UI shows “AdaptiveSparkPlan” → proof it’s active.
+
+> 💡 Think of AQE as Spark’s “auto-pilot” that corrects inefficiencies discovered during flight.
+
+#### 4. Transformations
+
+**Baseline:** Uses a Python UDF to categorize amounts. A Python UDF executes outside the JVM, serializing each row to Python and back. 
+That means:
+- No Catalyst optimization (the query planner can’t reorder or push filters).
+- No vectorization.
+- Constant serialization overhead per record.
+
+**Spark UI clue:** “PythonUDF” stage with low CPU utilization and high overhead time.
+
+**Optimized:** Replaces the UDF with native Spark expressions built from when(), col(), or SQL syntax. These run entirely inside the JVM, benefit from predicate pushdown, constant folding, and other Catalyst optimizations. They are also fully vectorized.
+
+```python
+tx2 = tx.withColumn(
+    "bucket",
+    when(col("amount") < 20, "low")
+    .when(col("amount") < 100, "mid")
+    .otherwise("high")
+)
+```
+
+- Impact
+    - Stage duration drops by an order of magnitude.
+    - Plan becomes fully optimizable and traceable.
+    - liminates Python-to-JVM serialization bottleneck.
+
+>💡 Always prefer built-in Spark SQL expressions; they’re faster and easier to maintain.
+
+#### 5. Output Write Pattern
+
+**Baseline:** Writes output with a fixed high partition count (repartition(120)), generating hundreds of tiny Parquet files, each ~3 KB. Each file triggers a separate task and increases metadata management cost. This is known as the small-files problem.
+
+- Why it’s harmful
+    - Overhead in the driver (tracking metadata).
+    - File-listing latency in cloud stores (S3, ADLS).
+    - Slower reads in downstream jobs.
+
+**Optimized:**
+The optimized job writes using:
+
+```python
+out.repartition("event_date") \
+   .write.mode("overwrite") \
+   .partitionBy("event_date")
+```
+
+This groups records per day and produces larger, fewer files (128 – 512 MB ideal for Parquet).
+These are easier to read, compress better, and drastically reduce metadata operations.
+
+- Impact:
+    - Read times drop by 2–4×.
+    - Less memory pressure on the driver.
+    - Downstream jobs become more predictable and cheaper to run.
+
+#### 6. Metrics & Observability
+
+**Baseline:** Logs only the total runtime of each job into ops/job_runs.csv. That’s a start, but it tells you nothing about variance, reliability, or cost efficiency.
+
+**Optimized:**
+Adds structured operational logging with:
+- start/end timestamps
+- duration_seconds
+- status (success/failure)
+- cost_eur (derived from runtime × rate)
+- and later summarized p50/p95 values.
+
+Generates:
+- ops/report.md → Markdown summary
+- ops/p95_chart.png → Before→After visualization
+
+This mirrors a production-grade observability pattern: you can measure performance gains quantitatively, not anecdotally.
+
+- Impact
+    - You can trend runtime, cost, and reliability over time.
+    - Managers can see measurable ROI (runtime ↓, cost ↓, success ↑).
+
+> 💡 If it’s not measured, it’s just a guess. Metrics turn optimizations into verifiable results.
+
+#### 7. AQE + Salting Combined
+
+Why combining both matters:
+
+- AQE works best for mild or moderate skew; it can’t pre-split extreme hot keys.
+- Salting handles the known heavy keys upfront.
+- AQE then fine-tunes at runtime, merging or splitting remaining partitions intelligently.
+
+Result: Even under severe data imbalance, stages stay uniform, CPU utilization stabilizes, and runtime variance between p50 and p95 shrinks dramatically.
+
+
+
+</details>
+
 
 ### 3.2. How to Compare (Quick Checklist)
 
