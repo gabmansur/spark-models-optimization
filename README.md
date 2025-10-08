@@ -1,8 +1,30 @@
 # Spark Optimization: From Messy Legacy to Measurable Wins
 
+![Python](https://img.shields.io/badge/Python-3.10-blue)
+![PySpark](https://img.shields.io/badge/PySpark-3.5.x-orange)
+![Local%20Mode](https://img.shields.io/badge/Run-Local%20Mode-success)
+
 This portfolio project simulates a real-world Spark environment with skewed data and thousands of small files, then shows how to diagnose, optimize, and prove performance wins using p95 runtime, cost estimates, and reliability basics. It’s designed to mirror what I’d do in a 6-month engagement on a 60–70 model platform.
 
----
+### Executive Snapshot
+- p95 runtime: **60 min → 30 min** (simulated)
+- Estimated cost/run: **€48 → €26**
+- Reliability: documented runbook, basic SLOs, MTTR tracking stub
+
+
+**Table of Contents**
+1) Backstory & Context  
+2) Key Concepts  
+3) What’s in Here  
+4) How to Run  
+5) Diagnosis → Optimization  
+6) What Changes  
+7) Metrics & Reporting  
+8) Runbook (Example)  
+9) 6-Month Scale-Up  
+10) Next Steps  
+11) License & Credits  
+12) Why This Matters
 
 ## 1) Backstory & Context
 
@@ -18,6 +40,21 @@ I recreate a mini slice of that world, one representative pipeline (“daily_sal
 * A repeatable Spark optimization playbook (skew fixes, broadcast, partitioning/compaction, AQE, UDF hygiene)
 * How I measure and report improvements with p95 runtime cost/run success rate, and basic MTTR
 * A small taste of lineage data contracts runbooks and observability
+
+**Assumptions & Constraints**
+- Simulated in local mode with generated data; numbers are illustrative.
+- Optimizations focus on Spark SQL/DataFrame patterns, not cluster sizing.
+- Cost = duration × hourly rate; in real programs, integrate billing APIs.
+
+**Environment**
+- Python 3.10  
+- PySpark 3.5.x  
+- Pandas / Matplotlib for reporting
+
+**Data scale (configurable)**
+- customers: 100k  
+- transactions: 20–50M (skew injected on `customer_id = 0`)  
+- seed: 42
 
 > 💡 I’m simulating a company’s data system that became bloated and slow. This project shows how I’d diagnose performance issues, fix them, and prove the difference, like tuning up an old machine until it runs smoothly again.
 
@@ -92,6 +129,12 @@ Results:
 * `ops/report.md` - p50/p95 per job + **Before→After** table
 * `ops/p95_chart.png` - bar chart to drop into your deck
 
+**Make targets (optional)**
+- `make venv && make install`  
+- `make data`  # generate skew + many small files
+- `make baseline && make optimized`
+- `make report`  # build p50/p95 + chart
+
 >💡 Just set up Python, generate the data, run both versions of the job, and produce a performance report, no cluster or special hardware needed.
 
 ---
@@ -100,26 +143,185 @@ Results:
 
 ### A. Inventory & Baseline
 
-1. **Inventory models** (simulated by documenting this job): owner, purpose, inputs, outputs, schedule, tier.
-2. **Baseline**: log each run’s start/end time and status → compute p50/p95 runtime.
-3. **Cost/run**: estimate compute cost from runtime × hourly rate (simple but honest).
-4. **Quality snapshot** (optional here): row counts, nulls, key uniqueness for outputs.
+This section is about understanding what exists and how it behaves before changing anything. You document, measure, and validate the current state so you can later prove real improvement. 
 
->  💡 Start by listing all data jobs and measuring how they behave today, how long they take, how much they cost, and how often they fail. Why p95? It reflects the “worst normal” performance. Improving p95 means fewer scary spikes. 
+#### A1. Inventory models
+Document every model’s purpose, owner, inputs, outputs, and schedule.
+
+<details>
+<summary>💡 Quick insight</summary>
+
+**What it means:**  
+Think of it as a simplified model registry, even if it’s just one job in this simulation.  
+
+**Why it matters:**  
+You need visibility and ownership before you can optimize anything.  
+This prevents “orphaned” or mystery jobs and gives clarity on what exists and why.  
+
+**How it’s done:**  
+Create a simple CSV (`ops/models_registry.csv`) listing:  
+- model_name  
+- owner  
+- description/purpose  
+- inputs  
+- outputs  
+- schedule  
+- tier/priority  
+
+```python
+# Example: create a model registry
+import csv
+
+models = [
+    {"model_name": "spark_model_optimizer", "owner": "Gabi", "description": "Simulated PySpark job for optimization demo", "inputs": "transactions.parquet", "outputs": "optimized_output.parquet", "schedule": "daily", "tier": "gold"},
+]
+
+with open("ops/models_registry.csv", "w", newline="") as f:
+    writer = csv.DictWriter(f, fieldnames=models[0].keys())
+    writer.writeheader()
+    writer.writerows(models)
+  ```
+
+</details>
+
+#### A2. Baseline
+Log each run’s start/end time and status: compute p50/p95 runtime.
+
+<details> <summary>💡 Quick insight</summary>
+
+**What it means:**
+Record start/end times for each run and compute the median (p50) and slowest (p95) runtimes.
+This becomes your benchmark for future optimizations.
+
+**Why it matters:**
+It provides objective evidence of progress and helps detect outliers or regressions later.
+
+**How it’s done:**
+Log every run’s timestamps and durations in a CSV file (ops/job_runs.csv).
+
+```python
+import csv, datetime
+
+run = {
+    "job_name": "spark_model_optimizer",
+    "start_time": datetime.datetime.now(),
+    "end_time": datetime.datetime.now() + datetime.timedelta(seconds=180),
+    "duration_sec": 180,
+    "status": "success"
+}
+
+with open("ops/job_runs.csv", "a", newline="") as f:
+    writer = csv.DictWriter(f, fieldnames=run.keys())
+    if f.tell() == 0:
+        writer.writeheader()
+    writer.writerow(run)
+```
+</details>
+
+
+
+#### A3. Cost per run
+Estimate compute cost from runtime × hourly rate (simple but honest).
+
+<details> <summary>💡 Quick insight</summary>
+
+**What it means:**
+Convert job runtime into an estimated compute cost (runtime × hourly cluster rate).
+
+**Why it matters:**
+- Translates technical performance into business impact.
+- Faster jobs = lower compute cost, which makes results easier to justify to management.
+
+**How it’s done:**
+Use the recorded runtimes and multiply by an hourly cost (for example, €2.50/hr).
+
+```python
+import pandas as pd
+
+runs = pd.read_csv("ops/job_runs.csv")
+runs["cluster_cost_eur_hr"] = 2.50
+runs["cost_eur"] = (runs["duration_sec"] / 3600) * runs["cluster_cost_eur_hr"]
+runs.to_csv("ops/job_runs.csv", index=False)
+```
+</details>
+
+
+
+#### A4. Quality snapshot (optional here)
+Row counts, nulls, key uniqueness for outputs.
+
+<details> <summary>💡 Quick insight</summary>
+
+**What it means:**
+Capture a quick overview of data health: row counts, null values, and key uniqueness.
+
+**Why it matters:**
+- Performance means nothing if your outputs are broken.
+- Data quality validates that your optimized job still produces correct results.
+
+**How it’s done:**
+Run lightweight checks after each job and log them to a small ops/quality_snapshot.csv.
+
+```python
+from pyspark.sql.functions import col, count, countDistinct
+
+quality = df.agg(
+    count("*").alias("row_count"),
+    *[count(when(col(c).isNull(), c)).alias(f"{c}_nulls") for c in df.columns]
+)
+
+unique_keys = df.select(countDistinct("id").alias("unique_id_count"))
+quality.show()
+unique_keys.show()
+```
+
+</details>
+
 
 ### B. Lineage (Mini)
 
-* Wrap reads/writes via helpers so we can record sources/targets. This repo focuses on performance, but the same wrappers can append to a lightweight `ops.model_lineage`. 
+This section ensures that every input and output is traceable. It’s a light lineage layer that records what depends on what, so later optimizations don’t break hidden links.
 
->  💡 It’s like tracing the recipe of your data, knowing which ingredients go into which dish.
+#### B1. Record Sources & Targets
+Wrap reads and writes with helper functions to log where data comes from and goes to.
+
+<details>
+<summary>💡 Quick insight</summary>
+
+**What it means:**  
+Each Spark read/write adds a small metadata record to `ops/model_lineage.csv`.  
+
+**Why it matters:**  
+You build a living map of your data flow — even simple jobs benefit from that transparency.  
+
+**Lineage schema (`ops/model_lineage.csv`):**
+- timestamp
+- action (read|write)
+- model_name
+- path
+- version (optional)
+
+**How it’s done:**  
+Simulate by wrapping reads/writes:
+
+```python
+def tracked_read(path):
+    log_lineage("read", path)
+    return spark.read.parquet(path)
+
+def tracked_write(df, path):
+    log_lineage("write", path)
+    df.write.parquet(path)
+```
+</details>
+
+### C. Optimization & Refactoring
+
+Apply measurable, repeatable improvements to Spark jobs, focusing on runtime, cost, and reliability. Each optimization here is treated as a reproducible engineering pattern: explain → apply → verify → watch the impact.
 
 
-### C. Quick Wins
 
-These are the most impactful optimizations I’d apply to the PySpark model portfolio, each one can be expanded for a deeper explanation and implementation logic.
-
-
-#### 1. Fix Data Skew with Key Salting
+#### C1. Fix Data Skew with Key Salting
 When one key (like `customer_id=0`) dominates, one Spark task gets all the load.
 
 <details>
@@ -145,7 +347,7 @@ We add a small random “salt” column for the hot key only, splitting `custome
 </details>
 
 
-#### 2. Enable Adaptive Query Execution (AQE)
+#### C2. Enable Adaptive Query Execution (AQE)
 Let Spark adapt its plan based on *real* runtime statistics.
 
 <details>
@@ -170,7 +372,7 @@ Enabled in `spark_local.conf` and confirmed in each job (`spark.sql.adaptive.ske
 </details>
 
 
-#### 3. Broadcast Small Dimensions
+#### C3. Broadcast Small Dimensions
 Avoid expensive shuffles by shipping the small table to every worker.
 
 <details>
@@ -196,7 +398,7 @@ Removes huge network traffic and disk shuffle costs. Often reduces job runtime b
 </details>
 
 
-#### 4. Compact Small Files + Partition Outputs
+#### C4. Compact Small Files + Partition Outputs
 Reduce metadata overhead and speed up reads by writing fewer, larger files.
 
 <details>
@@ -224,7 +426,7 @@ out.repartition("event_date").write.partitionBy("event_date")
 
 </details>
 
-#### 5. Replace Python UDFs with Native Expressions
+#### C5. Replace Python UDFs with Native Expressions
 Unlock Spark’s full optimization power.
 
 <details>
@@ -261,7 +463,7 @@ when(col("amount") < 20, "low")
 </details>
 
 
-#### 6. (Optional) Checkpointing & Caching
+#### C6. (Optional) Checkpointing & Caching
 
 Stabilize long-running jobs and simplify debugging.
 
@@ -316,7 +518,7 @@ df_joined.count()
 
 
 
-#### 7. Partition Pruning
+#### C7. Partition Pruning
 
 Speed up queries by reading only relevant partitions. <details> <summary>💡 Quick insight</summary>
 
@@ -360,7 +562,7 @@ df_day = spark.read.parquet("s3://bucket/transactions/").filter("event_date = '2
 
 </details>
 
-#### 8. p95 and p50 Runtime Measurement
+#### C8. Runtime Analysis
 
 Quantify your improvements with real metrics.
 
@@ -409,7 +611,7 @@ summary.to_markdown("ops/p95_summary.md")
 
 </details>
 
-#### 9. Cost & Efficiency Estimation
+#### C9. Business Impact Analysis
 
 Turn speed gains into tangible business value.
 
@@ -452,7 +654,7 @@ cost_summary.to_markdown("ops/cost_summary.md")
 
 </details>
 
-#### 10. Runbook & Reliability Practices
+#### C10. Operational Reliability
 
 Keep pipelines observable, recoverable, and predictable.
 
@@ -507,13 +709,15 @@ with open("ops/job_runs.csv", "a", newline="") as f:
 </details>
 
 
-### D. Prove It
+### D. Validation & Results
 
-* Re-run both versions several times.
-* Build p95 report and chart from the logged runs.
-* (Optional) Track success rate and MTTR if you simulate failures/restarts.
+Quantify and communicate improvements clearly. After optimization, re-run both the baseline and optimized versions multiple times under identical conditions.
 
-> 💡 Run both versions several times and show the difference, how much faster, cheaper, and more stable it became.
+1. Compute p50/p95 runtimes for both.
+2. Compare average cost per job.
+3. Confirm output row counts and quality metrics are identical.
+4. Summarize findings in a short report (`ops/summary_report.md`).
+5. Confirm output parity: row counts, key uniqueness, and high-level aggregates match baseline vs optimized.
 
 ---
 
@@ -538,6 +742,14 @@ with open("ops/job_runs.csv", "a", newline="") as f:
 * **Before → After chart** → `ops/p95_chart.png`
 
 > **p95 reduction** example: if baseline p95 = **60 min** and optimized p95 = **30 min**, that’s a **50% cut** in the slow-day time.
+
+**Outcomes (simulated)**
+| Metric                | Baseline | Optimized | Change |
+|-----------------------|----------|-----------|--------|
+| p50 runtime           | 38 min   | 22 min    | −42%   |
+| p95 runtime           | 60 min   | 30 min    | −50%   |
+| Cost per run (est.)   | €48      | €26       | −46%   |
+| Success rate          | 98%      | 99.5%     | +1.5pp |
 
 Optional (extend later):
 
