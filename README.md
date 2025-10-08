@@ -1,15 +1,15 @@
-# Spark Optimization: From Messy Legacy to Measurable Wins
+# Spark Optimization: From Legacy Systems to Measurable Performance Gains
 
 ![Python](https://img.shields.io/badge/Python-3.10-blue)
 ![PySpark](https://img.shields.io/badge/PySpark-3.5.x-orange)
 ![Local%20Mode](https://img.shields.io/badge/Run-Local%20Mode-success)
 
-This portfolio project simulates a real-world Spark environment with skewed data and thousands of small files, then shows how to diagnose, optimize, and prove performance wins using p95 runtime, cost estimates, and reliability basics. It’s designed to mirror what I’d do in a 6-month engagement on a 60–70 model platform.
+This project demonstrates a real-world Spark optimization workflow, from diagnosing skewed joins and small-file bottlenecks to implementing adaptive execution, broadcast joins, and partition compaction. The result: measurable runtime and cost improvements, proven through p95 metrics and reproducible runs.
 
 ### Executive Snapshot
-- p95 runtime: **60 min → 30 min** (simulated)
-- Estimated cost/run: **€48 → €26**
-- Reliability: documented runbook, basic SLOs, MTTR tracking stub
+- **p95 runtime:** 26.5 s → 6.1 s (−77% improvement)
+- **Estimated cost/run:** €0.018 → €0.004 (−77%)
+- **Reliability:** document-based runbook with defined SLOs and MTTR tracking stub
 
 
 ## 📖 Table of Contents
@@ -50,8 +50,8 @@ I recreate a mini slice of that world with dummy data that intentionally include
 
 **Assumptions & Constraints**
 - Simulated in local mode with generated data; numbers are illustrative.  
-- Optimizations focus on Spark SQL/DataFrame patterns, not cluster sizing.  
-- Cost = duration × hourly rate; in real programs, integrate billing APIs.
+- Optimizations target Spark code and logic, specifically SQL/DataFrame patterns like joins, partitioning, and skew handling, not cluster sizing or hardware scaling. The goal is to demonstrate how smarter design alone can improve runtime and reliability without adding compute resources. 
+- Cost model assumption: For simplicity, cost is modeled linearly as `runtime × hourly_rate`. This works well for a small-scale, single-environment simulation, but in real distributed clusters the relationship between time and cost is **not strictly linear**. Factors such as auto-scaling, I/O overhead, executor startup time, and idle compute can cause cost and runtime to diverge.
 
 **Environment**
 - Python 3.10  
@@ -158,6 +158,10 @@ python src/jobs/job_baseline.py
 ```python
 python src/jobs/job_optimized.py
 ```
+
+>💡 **Why multiple runs?**  
+> In this local simulation, runtimes are fairly stable because everything executes on a single machine. In real distributed environments, job runtimes naturally vary between executions due to cluster scheduling, shuffle randomness, caching effects, and network I/O. Running each job **2–3 times** yields more reliable p50 (typical) and p95 (slow-day) estimates by smoothing transient noise.
+
 
 4. Build the report
 ```python
@@ -822,7 +826,7 @@ python src/jobs/generate_data.py
 
 **What happens:**
 
-- Creates data/raw/customers/ and data/raw/transactions/
+- Creates `data/raw/customers/` and `data/raw/transactions/`
 - Injects skew (20% of all rows belong to customer_id=0)
 - Writes 14 daily partitions to simulate a typical ETL scenario
 - Intentionally over-partitions to generate hundreds of small Parquet files
@@ -840,18 +844,117 @@ Before optimizing anything, visualize and validate the problem.
 ```bash
 python src/jobs/inspect_customers.py
 python src/jobs/inspect_transactions.py
+python src/jobs/inspect_small_files.py
 ```
 
 **You’ll see:**
 
-- Schemas and sample records for both datasets
-- A “top keys” summary showing that customer_id = 0 dominates
-- File counts per partition, confirming the small-file explosion
+#### a) Schemas and sample records for both datasets
 
-**Diagnosis:** Classic Spark bottlenecks confirmed:
+```sql
+=== customers schema ===
+root
+ |-- customer_id: long (nullable = false)
+ |-- segment: string (nullable = true)
+ |-- signup_date: date (nullable = true)
 
-- Data skew → one key dominates work distribution
-- Small files → excessive metadata + slow reads
+=== transactions schema ===
+root
+ |-- customer_id: long (nullable = false)
+ |-- amount: double (nullable = true)
+ |-- event_ts: timestamp (nullable = true)
+
+```
+**Interpretation:**
+The data model mirrors a typical star schema:
+
+- customers → dimension (small, descriptive)
+- transactions → fact (large, behavioral)
+
+This setup is intentional; in real Spark workloads, most performance problems arise during joins between a large fact table and small dimension tables.
+
+<details><summary>💡 Best practice for schema design</summary>
+
+| Principle                                                        | Why it matters                                     |
+| ---------------------------------------------------------------- | -------------------------------------------------- |
+| Use simple numeric keys (ints/longs)                             | Hashing & partitioning are faster than on strings  |
+| Avoid nested JSON unless needed                                  | Increases serialization & scan cost                |
+| Keep timestamp columns in UTC                                    | Simplifies partition pruning and freshness metrics |
+| Ensure dimension tables are small enough to broadcast (< 200 MB) | Unlocks local joins without large shuffles         |
+
+</details>
+
+#### b) A “top keys” summary showing that customer_id = 0 dominates
+
+- Total rows: **119,994**
+- Hot key: **customer_id = 0** (~**20.00%** of all rows)
+
+| customer_id | count | pct |
+|---:|---:|---:|
+| 0 | 23,996 | 20.00% |
+| 316 | 23 | 0.02% |
+| 3554 | 22 | 0.02% |
+| 8404 | 22 | 0.02% |
+| 9633 | 22 | 0.02% |
+| 1181 | 21 | 0.02% |
+| 4257 | 21 | 0.02% |
+| 8159 | 21 | 0.02% |
+| 1970 | 21 | 0.02% |
+| 5364 | 21 | 0.02% |
+
+**Interpretation:**
+This shows a hot key — customer_id = 0 — dominating the dataset.
+Spark distributes data by key during joins and aggregations. When one key is that heavy, one task does most of the work while others sit idle.
+
+This imbalance leads to:
+
+- Long tail in stage duration (visible in Spark UI)
+- Overloaded executors and wasted cluster capacity
+- p95 runtime inflation due to one “straggler” task
+
+<details><summary>💡 Best practice for handling skew</summary>
+
+| Technique                          | When to use                            | Benefit                                   |
+| ---------------------------------- | -------------------------------------- | ----------------------------------------- |
+| **Salting hot keys**               | When a few IDs dominate                | Evenly redistributes work                 |
+| **AQE skew join handling**         | When skew is moderate or unpredictable | Spark automatically rebalances partitions |
+| **Broadcast join small dimension** | When one side is small (< 200 MB)      | Avoids shuffles entirely                  |
+| **Filtering early**                | When skewed rows can be pre-aggregated | Reduces input size before join            |
+</details>
+
+#### c) File counts per partition, confirming the small-file explosion
+
+```sql
+=== Small-file summary per day partition ===
+day            files  total     avg_file
+2025-09-24     120    353.2 KB  2.9 KB
+2025-09-25     120    353.2 KB  2.9 KB
+...
+2025-10-07     120    353.6 KB  2.9 KB
+
+⚠️  All partitions below 8 MB average file size — classic small-file storm.
+```
+
+**Interpretation:**
+Each partition (per day) has ~120 Parquet files of only 2.9 KB each.
+This is highly inefficient: Spark spends more time opening and closing files than actually reading data.
+These tiny files cause:
+
+- Excessive metadata overhead in the driver and NameNode (or cloud storage API)
+- Slow scans and shuffles
+- Wasted compute due to task scheduling overhead
+
+<details><summary>💡 Best practice for file sizes</summary>
+
+| File Format         | Ideal File Size (per file)          | Why                                                                    |
+| ------------------- | ----------------------------------- | ---------------------------------------------------------------------- |
+| **Parquet / ORC**   | **128 MB – 512 MB**                 | Sweet spot for parallel reads, metadata efficiency, and I/O throughput |
+| **Delta / Iceberg** | **256 MB – 1 GB**                   | Slightly higher optimal range due to additional transaction overhead   |
+| **CSV / JSON**      | **32 MB – 128 MB**                  | Lightweight text formats benefit from smaller files                    |
+| **Rule of thumb:**  | Avoid files **<8 MB** and **>1 GB** | Too small = overhead, too large = poor parallelism                     |
+
+
+</details>
 
 ### Step 3. Run the Baseline Job
 
@@ -902,9 +1005,32 @@ This generates:
 
 From `ops/report.md`:
 
-| Model        | Baseline (p95) | Optimized (p95) | Improvement      |
-| :----------- | -------------- | --------------- | ---------------- |
-| transactions | 26.52 s        | 6.07 s          | **−77% runtime** |
+# Runtime Report
+
+## Runs
+
+| model_name             | run_id                               | start_ts                         | end_ts                           | duration_seconds | status  | cost_eur |
+| :--------------------- | :----------------------------------- | :------------------------------- | :------------------------------- | ---------------: | :------ | -------: |
+| transactions_baseline  | 2c23bd3b-d992-484b-aa71-dd461b813a2c | 2025-10-08T20:54:01.114259+00:00 | 2025-10-08T20:54:27.636009+00:00 |          26.5218 | SUCCESS |   0.0184 |
+| transactions_baseline  | 770d5ba6-16b1-40b3-9e2a-e463679ffae7 | 2025-10-08T21:32:04.023720+00:00 | 2025-10-08T21:32:30.850281+00:00 |          26.8266 | SUCCESS |   0.0186 |
+| transactions_baseline  | 0472f7e6-b9e8-48b7-bf73-6d6f4daffc10 | 2025-10-08T21:33:37.293502+00:00 | 2025-10-08T21:34:04.249511+00:00 |          26.9560 | SUCCESS |   0.0187 |
+| transactions_optimized | 8ea2006d-2613-4885-8d37-e084d589e07b | 2025-10-08T20:56:02.598158+00:00 | 2025-10-08T20:56:08.668190+00:00 |           6.0700 | SUCCESS |   0.0042 |
+| transactions_optimized | c1c54ce2-e0b5-4723-81cd-192d50e9d3dd | 2025-10-08T21:33:13.134731+00:00 | 2025-10-08T21:33:19.014407+00:00 |           5.8797 | SUCCESS |   0.0041 |
+| transactions_optimized | 51c42a81-2989-43c6-82d4-df8056a2435a | 2025-10-08T21:33:25.517743+00:00 | 2025-10-08T21:33:31.163838+00:00 |           5.6461 | SUCCESS |   0.0039 |
+
+
+## Per-job summary
+
+| model_name             |   runs |    avg_s |    p50_s |   p95_s | family       | type      |
+|:-----------------------|-------:|---------:|---------:|--------:|:-------------|:----------|
+| transactions_baseline  |      3 | 26.7681  | 26.8266  | 26.9431 | transactions | baseline  |
+| transactions_optimized |      3 |  5.86527 |  5.87968 |  6.051  | transactions | optimized |
+
+## Before -> After (p95 seconds)
+
+| model        |   baseline |   optimized |
+|:-------------|-----------:|------------:|
+| transactions |    26.9431 |       6.051 |
 
 
 Estimated cost reduction: ~€0.018 → €0.004 (−77%)
