@@ -845,13 +845,14 @@ Before optimizing anything, visualize and validate the problem.
 python src/jobs/inspect_customers.py
 python src/jobs/inspect_transactions.py
 python src/jobs/inspect_small_files.py
+# optional: python src/jobs/inspect_top_keys.py  # saves a markdown table
 ```
 
 **You’ll see:**
 
 #### a) Schemas and sample records for both datasets
 
-```sql
+```objectivec
 === customers schema ===
 root
  |-- customer_id: long (nullable = false)
@@ -868,8 +869,8 @@ root
 **Interpretation:**
 The data model mirrors a typical star schema:
 
-- customers → dimension (small, descriptive)
-- transactions → fact (large, behavioral)
+- customers → dimension (small, descriptive) - perfect for broadcast
+- transactions → large fact with a join key → where skew hurts.
 
 This setup is intentional; in real Spark workloads, most performance problems arise during joins between a large fact table and small dimension tables.
 
@@ -887,20 +888,15 @@ This setup is intentional; in real Spark workloads, most performance problems ar
 #### b) A “top keys” summary showing that customer_id = 0 dominates
 
 - Total rows: **119,994**
-- Hot key: **customer_id = 0** (~**20.00%** of all rows)
+- Hot key: `customer_id = 0` (~**20.00%** of all rows)
 
-| customer_id | count | pct |
-|---:|---:|---:|
-| 0 | 23,996 | 20.00% |
-| 316 | 23 | 0.02% |
-| 3554 | 22 | 0.02% |
-| 8404 | 22 | 0.02% |
-| 9633 | 22 | 0.02% |
-| 1181 | 21 | 0.02% |
-| 4257 | 21 | 0.02% |
-| 8159 | 21 | 0.02% |
-| 1970 | 21 | 0.02% |
-| 5364 | 21 | 0.02% |
+| customer_id |  count |    pct |
+| ----------: | -----: | -----: |
+|           0 | 23,996 | 20.00% |
+|         316 |     23 |  0.02% |
+|        3554 |     22 |  0.02% |
+|           … |      … |      … |
+
 
 **Interpretation:**
 This shows a hot key — customer_id = 0 — dominating the dataset.
@@ -911,6 +907,9 @@ This imbalance leads to:
 - Long tail in stage duration (visible in Spark UI)
 - Overloaded executors and wasted cluster capacity
 - p95 runtime inflation due to one “straggler” task
+
+**What we’ll fix:**
+Salt the hot key and broadcast the small dimension (plus AQE skew handling).
 
 <details><summary>💡 Best practice for handling skew</summary>
 
@@ -943,6 +942,9 @@ These tiny files cause:
 - Excessive metadata overhead in the driver and NameNode (or cloud storage API)
 - Slow scans and shuffles
 - Wasted compute due to task scheduling overhead
+
+**What we’ll fix:**
+Repartition by event_date and compact to fewer, larger files.
 
 <details><summary>💡 Best practice for file sizes</summary>
 
