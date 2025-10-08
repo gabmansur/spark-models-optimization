@@ -7,6 +7,10 @@ Anti-patterns included on purpose:
 - Python UDF (slow; bypasses Catalyst optimizations)
 - Regular join on a skewed key (hot customer_id=0 → slow stage)
 - Writes many small files (over-partitioned output)
+
+Business output (baseline):
+- Aggregates transactions by event_date, segment, and amount bucket
+- Writes to data/bronze/transactions_baseline/
 """
 
 import os, sys, time
@@ -25,21 +29,23 @@ def python_udf_bucket(amount: float) -> str:
     """Categorize amounts via a Python UDF (slow on purpose)."""
     if amount is None:
         return "unknown"
-    if amount < 20: return "low"
-    if amount < 100: return "mid"
+    if amount < 20:
+        return "low"
+    if amount < 100:
+        return "mid"
     return "high"
 
 def main():
-    spark = get_spark("job_baseline")
+    spark = get_spark("transactions_job_baseline")
     start = time.time()
     status = "SUCCESS"
 
     try:
-        raw_dir = p("data","raw")
+        raw_dir = p("data", "raw")
 
         # Read small dimension + large fact (lots of small files across days)
-        customers = spark.read.parquet(os.path.join(raw_dir,"customers"))
-        tx = spark.read.parquet(os.path.join(raw_dir,"transactions"))  # reads all partitions
+        customers = spark.read.parquet(os.path.join(raw_dir, "customers"))
+        tx = spark.read.parquet(os.path.join(raw_dir, "transactions"))  # reads all partitions
 
         # 1) Use a Python UDF for bucketing (this is intentionally suboptimal)
         from pyspark.sql.functions import udf
@@ -53,14 +59,20 @@ def main():
         out = (
             joined
             .withColumn("event_date", F.to_date("event_ts"))
-            .groupBy("event_date","segment","bucket")
-            .agg(F.count("*").alias("tx_count"), F.sum("amount").alias("revenue"))
+            .groupBy("event_date", "segment", "bucket")
+            .agg(
+                F.count("*").alias("tx_count"),
+                F.sum("amount").alias("revenue")
+            )
         )
 
         # 4) Write MANY small files again (keeps things slow/expensive)
-        (out.repartition(120)
-            .write.mode("overwrite")
-            .parquet(p("data","bronze","daily_sales_naive")))
+        #    (Repartitioning to a high number to simulate small-file explosion.)
+        (
+            out.repartition(120)
+               .write.mode("overwrite")
+               .parquet(p("data", "bronze", "transactions_baseline"))
+        )
 
     except Exception as e:
         status = f"FAIL:{e.__class__.__name__}"
@@ -72,7 +84,7 @@ def main():
         cost_eur = (end - start) / 3600.0 * eur_per_hour
 
         # Log run metrics so we can compute p95 later
-        log_run("daily_sales_baseline", start, end, status, cost_eur)
+        log_run("transactions_baseline", start, end, status, cost_eur)
         spark.stop()
 
 if __name__ == "__main__":

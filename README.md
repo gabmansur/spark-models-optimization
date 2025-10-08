@@ -24,33 +24,33 @@ This portfolio project simulates a real-world Spark environment with skewed data
    - [B. Lineage (Mini)](#b-lineage-mini)  
    - [C. Optimization & Refactoring](#c-optimization--refactoring)  
    - [D. Validation & Results](#d-validation--results)  
-6. [What Changes Between Baseline and Optimized](#6-what-changes-between-baseline-and-optimized)  
-7. [Metrics & Reporting](#7-metrics--reporting)  
-8. [Runbook (Example)](#8-runbook-example)  
-9. [How This Scales to a 6-Month Engagement](#9-how-this-scales-to-a-6-month-engagement)  
-10. [Next Steps / Ideas to Extend](#10-next-steps--ideas-to-extend)  
-11. [License & Credits](#11-license--credits)  
-12. [Why This Matters](#why-this-matters)
+6. [What Changes Between Baseline and Optimized](#6-what-changes-between-baseline-and-optimized)
+7. [In Action: End-to-End Simulation](#7-in-action-end-to-end-simulation)
+8. [Metrics & Reporting](#8-metrics--reporting)  
+9. [Runbook (Example)](#9-runbook-example)  
+10. [How This Scales to a 6-Month Engagement](#10-how-this-scales-to-a-6-month-engagement)  
+11. [Next Steps / Ideas to Extend](#11-next-steps--ideas-to-extend)  
+12. [License & Credits](#12-license--credits)  
+13. [Why This Matters](#13-why-this-matters)
 
 
 ## 1. Backstory & Context
 
-**The scenario:**
-A data platform grew over 7 years to ~60–70 PySpark models. Some of the most important jobs are slow, costly, and fragile. Adding new models takes too long. Leadership wants faster jobs, lower costs, and a safer way to build new ones.
+**The scenario**  
+A data platform grew over 7 years to ~60–70 PySpark models. Some critical jobs are slow, costly, and fragile. Adding new models takes too long. Leadership wants faster jobs, lower costs, and a safer way to build new ones.
 
-**This repo:**
-I recreate a mini slice of that world, one representative pipeline (“daily_sales”) with dummy data that intentionally includes skew and many small files (classic Spark pain). I then run a baseline job (naïve/inefficient) and an optimized job (best practices), and I log metrics so we can compare **Before → After** clearly.
+**This repo**  
+I recreate a mini slice of that world with dummy data that intentionally includes skew and many small files (classic Spark pain). I run a baseline job (naïve/inefficient) and an optimized job (best practices), and log metrics so we can compare **Before → After** clearly.
 
-**What I’m demonstrating:**
-
-* How I inventory, baseline, and diagnose performance issues
-* A repeatable Spark optimization playbook (skew fixes, broadcast, partitioning/compaction, AQE, UDF hygiene)
-* How I measure and report improvements with p95 runtime cost/run success rate, and basic MTTR
-* A small taste of lineage data contracts runbooks and observability
+**What I’m demonstrating**
+- How I inventory, baseline, and diagnose performance issues  
+- A repeatable Spark optimization playbook (skew fixes, broadcast, partitioning/compaction, AQE, UDF hygiene)  
+- How I measure and report improvements with p95 runtime, cost/run, success rate, and basic MTTR  
+- A taste of lineage, data contracts, runbooks, and observability
 
 **Assumptions & Constraints**
-- Simulated in local mode with generated data; numbers are illustrative.
-- Optimizations focus on Spark SQL/DataFrame patterns, not cluster sizing.
+- Simulated in local mode with generated data; numbers are illustrative.  
+- Optimizations focus on Spark SQL/DataFrame patterns, not cluster sizing.  
 - Cost = duration × hourly rate; in real programs, integrate billing APIs.
 
 **Environment**
@@ -59,11 +59,36 @@ I recreate a mini slice of that world, one representative pipeline (“daily_sal
 - Pandas / Matplotlib for reporting
 
 **Data scale (configurable)**
-- customers: 100k  
-- transactions: 20–50M (skew injected on `customer_id = 0`)  
+- customers: **~10k** (default in code)  
+- transactions: **~0.8M** across 14 daily partitions (default in code)  
+- skew injected on `customer_id = 0`  
 - seed: 42
 
-> 💡 I’m simulating a company’s data system that became bloated and slow. This project shows how I’d diagnose performance issues, fix them, and prove the difference, like tuning up an old machine until it runs smoothly again.
+### Synthetic Dataset
+
+This repo uses synthetic data to reproduce common Spark performance bottlenecks.
+
+- **customers** (dimension): ~10k rows  
+  - Columns: `customer_id`, `segment` (VIP/STD), `signup_date`
+- **transactions** (fact, skewed): ~0.8M rows across **14 daily partitions**  
+  - Columns: `customer_id`, `amount`, `event_ts` (+ derived `event_date`)  
+  - **Hot key skew:** ~20% of all rows use `customer_id = 0`  
+  - **Small-file storm:** intentionally over-partitioned to create lots of tiny Parquet files
+
+**Why this shape?**  
+It mirrors real production pain:
+- **Skew** makes one task do most of the work → slow stages & idle executors.  
+- **Too many small files** inflate metadata/scans → slow reads and costly shuffles.
+
+**How it’s used here**  
+Two jobs run the same logic on this data:
+- `transactions_baseline` — naïve join, UDFs, many small files, AQE off/defaults  
+- `transactions_optimized` — broadcast small dim, skew salting + AQE, native expressions, partitioned/compacted writes
+
+We then measure **p50/p95 runtimes** and estimate **cost/run**, so the **Before → After** improvement is explicit.
+
+> 💡 I’m simulating a company’s data system that became bloated and slow. This project shows how I’d diagnose performance issues, fix them, and prove the difference—like tuning up an old machine until it runs smoothly again.
+
 
 
 ## 2. Key Concepts (Plain Words)
@@ -781,71 +806,241 @@ Quantify and communicate improvements clearly. After optimization, re-run both t
 > 💡 The optimized job redistributes the work fairly, uses Spark’s built-in optimizations, and stores data more efficiently, making it faster and cheaper.
 
 
+## 7. In Action: End-to-End Simulation
 
-## 7. Metrics & Reporting
-
-* **Runtime per run** → `ops/job_runs.csv`
-* **p50 / p95 runtime** → `ops/report.md`
-* **Before → After chart** → `ops/p95_chart.png`
-
-> **p95 reduction** example: if baseline p95 = **60 min** and optimized p95 = **30 min**, that’s a **50% cut** in the slow-day time.
-
-**Outcomes (simulated)**
-| Metric                | Baseline | Optimized | Change |
-|-----------------------|----------|-----------|--------|
-| p50 runtime           | 38 min   | 22 min    | −42%   |
-| p95 runtime           | 60 min   | 30 min    | −50%   |
-| Cost per run (est.)   | €48      | €26       | −46%   |
-| Success rate          | 98%      | 99.5%     | +1.5pp |
-
-Optional (extend later):
-
-* **Success rate**: % of runs with `status = SUCCESS`
-* **MTTR**: time from a failed run to the next success
-* **Freshness**: `now() - last_success_time`
-
-> 💡 Each job records how long it takes and how much it costs. The system then summarizes that into a simple report you can show to any manager.
+This section walks through the full pipeline in action, from generating skewed data to running both the baseline and optimized jobs, inspecting their behavior, and verifying measurable improvements.  
+All steps below can be reproduced locally (no cluster required).
 
 
+### Step 1. Generate Skewed Data
 
-## 8. Runbook (Example)
+Run the job that simulates a real-world Spark performance issue — **data skew** and **many small files**.
 
-```
-RUNBOOK - daily_sales
-
-Owner: Gabi · Tier: T1
-Purpose: Daily revenue by segment for Ops dashboard
-Schedule: hourly
-
-Inputs
-- raw.transactions (event_ts, amount)
-- raw.customers (customer_id, segment)
-
-Outputs
-- silver.daily_sales (event_date, segment, bucket, tx_count, revenue)
-
-SLOs
-- Freshness ≤ 60 min (99%)
-- Success rate ≥ 99%
-- MTTR < 60 min
-
-Baseline (Before → After)
-- p95: 72 min → 34 min
-- Cost/run (est.): €48 → €26
-
-Common failures & fixes
-- Skew on customer_id = 0 → salt + broadcast; verify AQE
-- Small files storm → repartition by event_date; compact older partitions
-
-Reprocess
-- By `event_date` range; re-run optimized job
+```bash
+python src/jobs/generate_data.py
 ```
 
-> 💡 This is your “how-to” for each job: what it does, how fast it should be, and what to do if it fails.
+**What happens:**
+
+- Creates data/raw/customers/ and data/raw/transactions/
+- Injects skew (20% of all rows belong to customer_id=0)
+- Writes 14 daily partitions to simulate a typical ETL scenario
+- Intentionally over-partitions to generate hundreds of small Parquet files
+
+**Expected confirmation:**
+
+```bash
+Wrote customers + transactions (skew & small files) under data/raw
+```
+
+### Step 2. Inspect the Raw Data
+
+Before optimizing anything, visualize and validate the problem.
+
+```bash
+python src/jobs/inspect_customers.py
+python src/jobs/inspect_transactions.py
+```
+
+**You’ll see:**
+
+- Schemas and sample records for both datasets
+- A “top keys” summary showing that customer_id = 0 dominates
+- File counts per partition, confirming the small-file explosion
+
+**Diagnosis:** Classic Spark bottlenecks confirmed:
+
+- Data skew → one key dominates work distribution
+- Small files → excessive metadata + slow reads
+
+### Step 3. Run the Baseline Job
+
+```bash
+python src/jobs/job_baseline.py
+```
+
+**What happens:**
+
+- Regular join on the skewed key
+- Python UDF for bucketing
+- Writes thousands of tiny files
+- AQE off by default
+- Logs runtime to ops/job_runs.csv
+
+This mimics a real “legacy” data job: functional, but inefficient.
+
+### Step 4. Run the Optimized Job
+
+```bash
+python src/jobs/job_optimized.py
+```
+
+**Optimizations applied:**
+
+- Replaced Python UDFs with Spark-native expressions
+- Broadcasted small dimension table (customers)
+- Salted the hot key across 16 buckets
+- Enabled AQE + skew join handling
+- Compact, partitioned writes to data/silver/transactions_optimized/
 
 
+## 8. Metrics & Reporting
 
-## 9. How This Scales to a 6-Month Engagement
+Each run appends logs to `ops/job_runs.csv`.
+You can build the final comparison report and chart with:
+
+```bash
+python src/utils/metrics.py report
+```
+
+This generates:
+
+- `ops/report.md` → Markdown summary (p50 / p95)
+- `ops/p95_chart.png` → Before → After visualization
+
+**Results**
+
+From `ops/report.md`:
+
+| Model        | Baseline (p95) | Optimized (p95) | Improvement      |
+| :----------- | -------------- | --------------- | ---------------- |
+| transactions | 26.52 s        | 6.07 s          | **−77% runtime** |
+
+
+Estimated cost reduction: ~€0.018 → €0.004 (−77%)
+
+<p align="center"> <img src="ops/p95_chart.png" alt="p95 chart" width="600"/> </p>
+
+
+**Interpretation**
+
+- p95 runtime dropped from 26 s to 6 s — a 77% faster job.
+- Root cause: skewed join and small-file storm.
+- Fix impact: broadcast join + salting eliminated shuffle imbalance, compacted partitions reduced IO overhead.
+- Business impact (in real scale):
+- Lower compute cost
+- Faster daily refreshes
+- More predictable latency (less variance between p50 and p95)
+
+**Optional Next Steps**
+
+You can extend the same framework to:
+
+- Track success rate (% of successful runs)
+- Measure MTTR (mean time to recover from failures)
+- Add Freshness metrics (data latency per table)
+- Integrate cost tracking from your cloud provider (Databricks / Fabric / Synapse)
+
+## 9. Runbook
+
+This is your “how-to” for each job: what it does, how fast it should be, and what to do if it fails.
+
+<details>
+<summary>Sample Runbook</summary>
+    ```
+    RUNBOOK – transactions_aggregation
+
+    Owner: Gabi · Tier: T1
+    Purpose: Aggregate transactions by event_date and customer segment with amount bucket (low/mid/high) for downstream analytics.
+    Schedule: daily
+
+    Inputs
+    - data/raw/customers/      (customer_id, segment, signup_date)
+    - data/raw/transactions/   (customer_id, amount, event_ts → event_date)
+
+    Output
+    - data/bronze/daily_sales_naive/       (baseline)
+    - data/silver/daily_sales_optimized/   (optimized)
+
+    SLIs & SLOs
+    - p95 runtime (baseline): track only (no target)
+    - p95 runtime (optimized): ≤ 40 min (99%)
+    - Freshness: partition for day D ready by D+1 01:00 (99%)
+    - Success rate: ≥ 99%
+    - MTTR (Mean Time To Repair): < 60 min
+
+    Operational notes
+    - Skew: ~20% of rows belong to customer_id=0 (hot key)
+    - Small files: 14 day partitions intentionally over-partitioned (baseline) to simulate slow reads
+    - Optimizations: AQE on, broadcast small dim, salting hot key, partitioned writes by event_date, native Spark expressions
+
+    Run commands (local)
+    1) Generate data:
+    python src/jobs/generate_data.py
+    2) Baseline run:
+    python src/jobs/job_baseline.py
+    3) Optimized run:
+    python src/jobs/job_optimized.py
+    4) Report:
+    python src/utils/metrics.py report
+
+    Validation checks (baseline vs optimized must match)
+    - Row counts per event_date and segment
+    - Key uniqueness on (event_date, segment, bucket)
+    - Aggregate revenue per day within tolerance (exact match for this demo)
+
+    Common failures & fixes
+    - Slow stage due to skew (hot key):
+    → verify AQE enabled; use salting for hot key; broadcast customers
+    - Small files storm:
+    → repartition by event_date before write; target ~128MB average file size
+    - UDF bottlenecks:
+    → replace Python UDF with native expressions (when/otherwise, expr)
+
+    Reprocess procedure
+    - Rebuild a date range by filtering input partitions and re-running optimized job.
+    - Confirm parity metrics above, then publish optimized output.
+
+    Observability artifacts
+    - Runtime logs: ops/job_runs.csv
+    - Report: ops/report.md (p50/p95, before vs after)
+    - Chart: ops/p95_chart.png
+    - Spark UI: http://localhost:4040 (during a run)
+    ```
+</details>
+
+<details>
+<summary>Runbook minimal template</summary>
+    ```
+    RUNBOOK – <job_name>
+
+    Owner: <name> · Tier: T<1–3>
+    Purpose: <1–2 line purpose>
+    Schedule: <cron or natural language>
+
+    Inputs
+    - <source paths + key columns>
+
+    Output
+    - <target path / table>
+
+    SLIs & SLOs
+    - p95 runtime: ≤ <target> (99%)
+    - Freshness: <rule> (99%)
+    - Success rate: ≥ <target>%
+    - MTTR: <target> min
+
+    Run commands
+    - <how to run locally/CI>
+
+    Validation checks
+    - <row counts, uniqueness, aggregates>
+
+    Common failures & fixes
+    - <symptom → fix>
+
+    Reprocess procedure
+    - <steps>
+
+    Observability artifacts
+    - Logs: <path>
+    - Report: <path>
+    - UI: <link while running>
+    ```
+</details>
+
+
+## 10. How This Scales to a 6-Month Engagement
 
 This repo shows the **micro**. In a real project with 60–70 models, I:
 
@@ -859,7 +1054,7 @@ This repo shows the **micro**. In a real project with 60–70 models, I:
 
 
 
-## 10. Next Steps / Ideas to Extend
+## 11. Next Steps / Ideas to Extend
 
 * Add **quality checks** (nulls, uniqueness) and log to `ops.quality_metrics`.
 * Record **lineage** (`ops.model_lineage`) by wrapping reads/writes.
@@ -870,7 +1065,7 @@ This repo shows the **micro**. In a real project with 60–70 models, I:
 > 💡 Expand the project toward full data reliability and governance, like turning a prototype engine into a production-ready car.
 
 
-## 11. License & Credits
+## 12. License & Credits
 
 * Dummy data generated for demo purposes.
 * You’re free to fork/adapt with attribution.
@@ -879,7 +1074,7 @@ This repo shows the **micro**. In a real project with 60–70 models, I:
 
 
 
-### 12. Why this matters
+### 13. Why this matters
 
 Anyone can say “we’ll optimize Spark.” This project shows **how**: a **diagnosis → intervention → measurement** loop, with **clear numbers** (p95, cost/run) and a **story** leadership understands.
 

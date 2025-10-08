@@ -6,11 +6,14 @@ Used by all jobs to start Spark the same way and to build project-relative paths
 """
 
 import os
+import sys
 from pyspark.sql import SparkSession
+
 
 def project_root():
     """Return the absolute path to the project root (two levels up from /src/utils)."""
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 
 def p(*parts):
     """
@@ -19,20 +22,28 @@ def p(*parts):
     """
     return os.path.join(project_root(), *parts)
 
+
 def get_spark(app_name: str):
     """
     Build (or get) a SparkSession with local master by default and apply the
-    settings from conf/spark_local.conf. This keeps runs consistent.
+    settings from conf/spark_local.conf. Also pins the Python executable so
+    Spark's driver & executors use the venv python on Windows.
     """
     # Allow overriding the master (e.g., connect to a real cluster) via env
     master = os.environ.get("SPARK_MASTER", "local[*]")
 
     # Start building the SparkSession
-    builder = (SparkSession.builder
-               .appName(app_name)
-               .master(master))
+    builder = (
+        SparkSession.builder
+        .appName(app_name)
+        .master(master)
+        # Make executors use the same Python as this process (venv-safe)
+        .config("spark.pyspark.python", sys.executable)
+        .config("spark.pyspark.driver.python", sys.executable)
+        .config("spark.executorEnv.PYSPARK_PYTHON", sys.executable)
+    )
 
-    # Load local Spark config (AQE, skew handling, etc.)
+    # Load local Spark config (AQE, skew handling, temp dir, etc.)
     conf_file = p("conf", "spark_local.conf")
     if os.path.exists(conf_file):
         with open(conf_file) as f:
