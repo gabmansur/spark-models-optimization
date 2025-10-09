@@ -1222,7 +1222,7 @@ This is your “how-to” for each job: what it does, how fast it should be, and
 
 <details>
 <summary>Sample Runbook</summary>
-    ```
+
     RUNBOOK – transactions_aggregation
 
     Owner: Gabi · Tier: T1
@@ -1281,12 +1281,12 @@ This is your “how-to” for each job: what it does, how fast it should be, and
     - Report: ops/report.md (p50/p95, before vs after)
     - Chart: ops/p95_chart.png
     - Spark UI: http://localhost:4040 (during a run)
-    ```
+
 </details>
 
 <details>
 <summary>Runbook minimal template</summary>
-    ```
+    
     RUNBOOK – <job_name>
 
     Owner: <name> · Tier: T<1–3>
@@ -1321,7 +1321,7 @@ This is your “how-to” for each job: what it does, how fast it should be, and
     - Logs: <path>
     - Report: <path>
     - UI: <link while running>
-    ```
+    
 </details>
 
 
