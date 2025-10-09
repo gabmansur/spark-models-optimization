@@ -1203,9 +1203,9 @@ Estimated cost reduction: ~€0.018 → €0.004 (−77%)
 - Root cause: skewed join and small-file storm.
 - Fix impact: broadcast join + salting eliminated shuffle imbalance, compacted partitions reduced IO overhead.
 - Business impact (in real scale):
-- Lower compute cost
-- Faster daily refreshes
-- More predictable latency (less variance between p50 and p95)
+    - Lower compute cost
+    - Faster daily refreshes
+    - More predictable latency (less variance between p50 and p95)
 
 **Optional Next Steps**
 
