@@ -82,8 +82,8 @@ It mirrors real production pain:
 
 **How it’s used here**  
 Two jobs run the same logic on this data:
-- `transactions_baseline` — naïve join, UDFs, many small files, AQE off/defaults  
-- `transactions_optimized` — broadcast small dim, skew salting + AQE, native expressions, partitioned/compacted writes
+- `transactions_baseline`: naïve join, UDFs, many small files, AQE off/defaults  
+- `transactions_optimized`: broadcast small dim, skew salting + AQE, native expressions, partitioned/compacted writes
 
 We then measure **p50/p95 runtimes** and estimate **cost/run**, so the **Before → After** improvement is explicit.
 
