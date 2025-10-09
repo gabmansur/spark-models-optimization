@@ -87,7 +87,7 @@ Two jobs run the same logic on this data:
 
 We then measure **p50/p95 runtimes** and estimate **cost/run**, so the **Before → After** improvement is explicit.
 
-> 💡 I’m simulating a company’s data system that became bloated and slow. This project shows how I’d diagnose performance issues, fix them, and prove the difference—like tuning up an old machine until it runs smoothly again.
+> 💡 I’m simulating a company’s data system that became bloated and slow. This project shows how I’d diagnose performance issues, fix them, and prove the difference, like tuning up an old machine until it runs smoothly again!
 
 
 
