@@ -37,7 +37,7 @@ This project demonstrates a real-world Spark optimization workflow, from diagnos
 ## 1. Backstory & Context
 
 **The scenario**  
-A data platform grew over 7 years to ~60–70 PySpark models. Some critical jobs are slow, costly, and fragile. Adding new models takes too long. Leadership wants faster jobs, lower costs, and a safer way to build new ones.
+A data platform grew over the past years to ~80 PySpark models. Some critical jobs are slow, costly, and fragile. Adding new models takes too long. Leadership wants faster jobs, lower costs, and a safer way to build new ones.
 
 **This repo**  
 I recreate a mini slice of that world with dummy data that intentionally includes skew and many small files (classic Spark pain). I run a baseline job (naïve/inefficient) and an optimized job (best practices), and log metrics so we can compare **Before → After** clearly.
@@ -1327,7 +1327,7 @@ This is your “how-to” for each job: what it does, how fast it should be, and
 
 ## 10. How This Scales to a 6-Month Engagement
 
-This repo shows the **micro**. In a real project with 60–70 models, I:
+This repo shows the **micro**. In a real project with many models, I:
 
 1. Build a model catalog (owner, inputs/outputs, SLAs, runtime/cost/fail rate).
 2. Baseline all Tier-1/2 jobs, then attack the Pareto offenders.
