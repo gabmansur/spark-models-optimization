@@ -18,7 +18,6 @@ ENV/
 data/
 ops/*.csv
 ops/*.md
-ops/*.png
 ops/*.parquet
 ops/*.json
 ops/*.crc
