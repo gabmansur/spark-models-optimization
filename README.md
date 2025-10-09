@@ -1364,3 +1364,14 @@ This repo shows the **micro**. In a real project with many models, I:
 Anyone can say “we’ll optimize Spark.” This project shows **how**: a **diagnosis → intervention → measurement** loop, with **clear numbers** (p95, cost/run) and a **story** leadership understands.
 
 > 💡 It’s not just about speed; My priority is clarity, reliability, and showing real progress with proof everyone can understand.
+
+## Wanna get in touch?
+
+I believe good data engineering is about clarity, structure, and creating real impact. I focus on building reliable systems that make data feel human, traceable, and useful, not just technically impressive.
+
+If this resonates with you, let’s connect 👇  
+
+🔗 **LinkedIn:** [linkedin.com/in/gabriellamansur](https://www.linkedin.com/in/gabriellamansur)  
+🌐 **Website:** [www.aurum-data.com](https://www.aurum-data.com)
+
+*(I’m always open to meaningful collaborations, data discussions, or a good espresso-fueled brainstorm.)*
